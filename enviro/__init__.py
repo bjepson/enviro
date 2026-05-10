@@ -102,57 +102,6 @@ import enviro.helpers as helpers
 
 config_defaults.add_missing_config_settings()
 
-# read the state of vbus to know if we were woken up by USB
-vbus_present = Pin("WL_GPIO2", Pin.IN).value()
-
-#BUG Temporarily disabling battery reading, as it seems to cause issues when connected to Thonny
-"""
-# read battery voltage - we have to toggle the wifi chip select
-# pin to take the reading - this is probably not ideal but doesn't
-# seem to cause issues. there is no obvious way to shut down the
-# wifi for a while properly to do this (wlan.disonnect() and
-# wlan.active(False) both seem to mess things up big style..)
-old_state = Pin(WIFI_CS_PIN).value()
-Pin(WIFI_CS_PIN, Pin.OUT, value=True)
-sample_count = 10
-battery_voltage = 0
-for i in range(0, sample_count):
-  battery_voltage += (ADC(29).read_u16() * 3.3 / 65535) * 3
-battery_voltage /= sample_count
-battery_voltage = round(battery_voltage, 3)
-Pin(WIFI_CS_PIN).value(old_state)
-"""
-
-# set up the button, external trigger, and rtc alarm pins
-rtc_alarm_pin = Pin(RTC_ALARM_PIN, Pin.IN, Pin.PULL_DOWN)
-# BUG This should only be set up for Enviro Camera
-# external_trigger_pin = Pin(EXTERNAL_INTERRUPT_PIN, Pin.IN, Pin.PULL_DOWN)
-
-# intialise the pcf85063a real time clock chip
-rtc = PCF85063A(i2c)
-i2c.writeto_mem(0x51, 0x00, b'\x00') # ensure rtc is running (this should be default?)
-rtc.enable_timer_interrupt(False)
-
-t = rtc.datetime()
-# BUG ERRNO 22, EINVAL, when date read from RTC is invalid for the pico's RTC.
-RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0)) # synch PR2040 rtc too
-
-# jazz up that console! toot toot!
-print("       ___            ___            ___          ___          ___            ___       ")
-print("      /  /\          /__/\          /__/\        /  /\        /  /\          /  /\      ")
-print("     /  /:/_         \  \:\         \  \:\      /  /:/       /  /::\        /  /::\     ")
-print("    /  /:/ /\         \  \:\         \  \:\    /  /:/       /  /:/\:\      /  /:/\:\    ")
-print("   /  /:/ /:/_    _____\__\:\    ___  \  \:\  /__/::\      /  /:/~/:/     /  /:/  \:\   ")
-print("  /__/:/ /:/ /\  /__/::::::::\  /___\  \__\:\ \__\/\:\__  /__/:/ /:/___  /__/:/ \__\:\  ")
-print("  \  \:\/:/ /:/  \  \:\~~~__\/  \  \:\ |  |:|    \  \:\/\ \  \:\/:::::/  \  \:\ /  /:/  ")
-print("   \  \::/ /:/    \  \:\         \  \:\|  |:|     \__\::/  \  \::/~~~`    \  \:\  /:/   ")
-print("    \  \:\/:/      \  \:\         \  \:\__|:|     /  /:/    \  \:\         \  \:\/:/    ")
-print("     \  \::/        \  \:\         \  \::::/     /__/:/      \  \:\         \  \::/     ")
-print("      \__\/          \__\/          `~~~~~`      \__\/        \__\/          \__\/      ")
-print("")
-print("    -  --  ---- -----=--==--===  hey enviro, let's go!  ===--==--=----- ----  --  -     ")
-print("")
-
 def reconnect_wifi(ssid, password, country, hostname=None):
   import time
   import network
@@ -257,6 +206,103 @@ def connect_to_wifi():
     logging.error(f"! {x}")
     return False
 
+# connect to wifi and attempt to fetch the current time from an ntp server
+def sync_clock_from_ntp():
+  from phew import ntp
+  if not connect_to_wifi():
+    logging.error("  - failed to connect to WiFi in sync_clock_from_ntp")
+    return False
+  #TODO Fetch only does one attempt. Can also optionally set Pico RTC (do we want this?)
+  timestamp = ntp.fetch()
+  if not timestamp:
+    logging.error("  - failed to fetch time from ntp server")
+    return False  
+
+  # fixes an issue where sometimes the RTC would not pick up the new time
+  i2c.writeto_mem(0x51, 0x00, b'\x10') # reset the rtc so we can change the time
+  rtc.datetime(timestamp) # set the time on the rtc chip
+  i2c.writeto_mem(0x51, 0x00, b'\x00') # ensure rtc is running
+  rtc.enable_timer_interrupt(False)
+
+  # read back the RTC time to confirm it was updated successfully
+  dt = rtc.datetime()
+  if dt != timestamp[0:7]:
+    logging.error("  - failed to update rtc")
+    if helpers.file_exists("sync_time.txt"):
+      os.remove("sync_time.txt")
+    return False
+
+  logging.info("  - rtc synched")
+  
+  # write out the sync time log
+  with open("sync_time.txt", "w") as syncfile:
+    syncfile.write("{0:04d}-{1:02d}-{2:02d}T{3:02d}:{4:02d}:{5:02d}Z".format(*timestamp))  
+
+  return True
+
+# set the state of the warning led (off, on, blinking)
+def warn_led(state):
+  if state == WARN_LED_OFF:
+    rtc.set_clock_output(PCF85063A.CLOCK_OUT_OFF)
+  elif state == WARN_LED_ON:
+    rtc.set_clock_output(PCF85063A.CLOCK_OUT_1024HZ)
+  elif state == WARN_LED_BLINK:
+    rtc.set_clock_output(PCF85063A.CLOCK_OUT_1HZ)
+
+# read the state of vbus to know if we were woken up by USB
+vbus_present = Pin("WL_GPIO2", Pin.IN).value()
+
+#BUG Temporarily disabling battery reading, as it seems to cause issues when connected to Thonny
+"""
+# read battery voltage - we have to toggle the wifi chip select
+# pin to take the reading - this is probably not ideal but doesn't
+# seem to cause issues. there is no obvious way to shut down the
+# wifi for a while properly to do this (wlan.disonnect() and
+# wlan.active(False) both seem to mess things up big style..)
+old_state = Pin(WIFI_CS_PIN).value()
+Pin(WIFI_CS_PIN, Pin.OUT, value=True)
+sample_count = 10
+battery_voltage = 0
+for i in range(0, sample_count):
+  battery_voltage += (ADC(29).read_u16() * 3.3 / 65535) * 3
+battery_voltage /= sample_count
+battery_voltage = round(battery_voltage, 3)
+Pin(WIFI_CS_PIN).value(old_state)
+"""
+
+# set up the button, external trigger, and rtc alarm pins
+rtc_alarm_pin = Pin(RTC_ALARM_PIN, Pin.IN, Pin.PULL_DOWN)
+# BUG This should only be set up for Enviro Camera
+# external_trigger_pin = Pin(EXTERNAL_INTERRUPT_PIN, Pin.IN, Pin.PULL_DOWN)
+
+# intialise the pcf85063a real time clock chip
+rtc = PCF85063A(i2c)
+i2c.writeto_mem(0x51, 0x00, b'\x00') # ensure rtc is running (this should be default?)
+rtc.enable_timer_interrupt(False)
+
+t = rtc.datetime()
+# BUG ERRNO 22, EINVAL, when date read from RTC is invalid for the pico's RTC.
+RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0)) # synch PR2040 rtc too
+
+# jazz up that console! toot toot!
+print("       ___            ___            ___          ___          ___            ___       ")
+print("      /  /\          /__/\          /__/\        /  /\        /  /\          /  /\      ")
+print("     /  /:/_         \  \:\         \  \:\      /  /:/       /  /::\        /  /::\     ")
+print("    /  /:/ /\         \  \:\         \  \:\    /  /:/       /  /:/\:\      /  /:/\:\    ")
+print("   /  /:/ /:/_    _____\__\:\    ___  \  \:\  /__/::\      /  /:/~/:/     /  /:/  \:\   ")
+print("  /__/:/ /:/ /\  /__/::::::::\  /___\  \__\:\ \__\/\:\__  /__/:/ /:/___  /__/:/ \__\:\  ")
+print("  \  \:\/:/ /:/  \  \:\~~~__\/  \  \:\ |  |:|    \  \:\/\ \  \:\/:::::/  \  \:\ /  /:/  ")
+print("   \  \::/ /:/    \  \:\         \  \:\|  |:|     \__\::/  \  \::/~~~`    \  \:\  /:/   ")
+print("    \  \:\/:/      \  \:\         \  \:\__|:|     /  /:/    \  \:\         \  \:\/:/    ")
+print("     \  \::/        \  \:\         \  \::::/     /__/:/      \  \:\         \  \::/     ")
+print("      \__\/          \__\/          `~~~~~`      \__\/        \__\/          \__\/      ")
+print("")
+print("    -  --  ---- -----=--==--===  hey enviro, let's go!  ===--==--=----- ----  --  -     ")
+print("")
+
+# the pcf85063a defaults to 32KHz clock output so need to explicitly turn off
+warn_led(WARN_LED_OFF)
+
 # log the error, blink the warning led, and go back to sleep
 def halt(message):
   logging.error(message)
@@ -310,52 +356,6 @@ def is_clock_set():
         return True
 
   return False
-
-# connect to wifi and attempt to fetch the current time from an ntp server
-def sync_clock_from_ntp():
-  from phew import ntp
-  if not connect_to_wifi():
-    return False
-  #TODO Fetch only does one attempt. Can also optionally set Pico RTC (do we want this?)
-  timestamp = ntp.fetch()
-  if not timestamp:
-    logging.error("  - failed to fetch time from ntp server")
-    return False  
-
-  # fixes an issue where sometimes the RTC would not pick up the new time
-  i2c.writeto_mem(0x51, 0x00, b'\x10') # reset the rtc so we can change the time
-  rtc.datetime(timestamp) # set the time on the rtc chip
-  i2c.writeto_mem(0x51, 0x00, b'\x00') # ensure rtc is running
-  rtc.enable_timer_interrupt(False)
-
-  # read back the RTC time to confirm it was updated successfully
-  dt = rtc.datetime()
-  if dt != timestamp[0:7]:
-    logging.error("  - failed to update rtc")
-    if helpers.file_exists("sync_time.txt"):
-      os.remove("sync_time.txt")
-    return False
-
-  logging.info("  - rtc synched")
-  
-  # write out the sync time log
-  with open("sync_time.txt", "w") as syncfile:
-    syncfile.write("{0:04d}-{1:02d}-{2:02d}T{3:02d}:{4:02d}:{5:02d}Z".format(*timestamp))  
-
-  return True
-
-# set the state of the warning led (off, on, blinking)
-def warn_led(state):
-  if state == WARN_LED_OFF:
-    rtc.set_clock_output(PCF85063A.CLOCK_OUT_OFF)
-  elif state == WARN_LED_ON:
-    rtc.set_clock_output(PCF85063A.CLOCK_OUT_1024HZ)
-  elif state == WARN_LED_BLINK:
-    rtc.set_clock_output(PCF85063A.CLOCK_OUT_1HZ)
-    
-# the pcf85063a defaults to 32KHz clock output so need to explicitly turn off
-warn_led(WARN_LED_OFF)
-
 
 # returns the reason the board woke up from deep sleep
 def get_wake_reason():
@@ -421,7 +421,7 @@ def get_sensor_readings():
 def save_reading(readings):
   # open todays reading file and save readings
   helpers.mkdir_safe("readings")
-  readings_filename = f"readings/{helpers.date_string()}.csv"
+  readings_filename = f"readings/{helpers.datetime_file_string()}.csv"
   new_file = not helpers.file_exists(readings_filename)
   with open(readings_filename, "a") as f:
     if new_file:
