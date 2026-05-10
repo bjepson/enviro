@@ -55,7 +55,7 @@ moisture_target_c = 50
 
 log_wind = False
 log_rain = False
-log_lux_prox = False
+log_lux = False
 
 # compensate for usb power
 usb_power_temperature_offset = 4.5

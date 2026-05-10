@@ -37,9 +37,9 @@ def add_missing_config_settings():
     config.log_rain = False
 
   try:
-    config.log_lux_prox
+    config.log_lux
   except AttributeError:
-    warn_missing_config_setting("log_lux_prox")
+    warn_missing_config_setting("log_lux")
     config.log_lux = False
 
 def warn_missing_config_setting(setting):

@@ -193,9 +193,9 @@ def get_sensor_readings(seconds_since_last, is_usb_power):
 
   from ucollections import OrderedDict
   result = {
-    "temperature": bme280_data.temperature,
-    "pressure": bme280_data.pressure,
-    "humidity": bme280_data.humidity,
+    "temperature": round(bme280_data[0], 2),
+    "humidity": round(bme280_data[2], 2),
+    "pressure": round(bme280_data[1] / 100.0, 2),
   }
 
   if config.log_wind:
@@ -203,11 +203,10 @@ def get_sensor_readings(seconds_since_last, is_usb_power):
     result["wind_direction"] = wind_direction()
 
   if config.log_rain:
-    result["rainfall"] = rain
-    result["rainfall_per_second"] = rain_per_second
+    result["rain"] = rain
+    result["rain_per_second"] = rain_per_second
 
-  if config.log_lux_prox:
-    result["light"] = ltr_data["lux"]
-    result["proximity"] = ltr_data["proximity"]
+  if config.log_lux:
+    result["luminance"] = round(ltr_data[BreakoutLTR559.LUX], 2)
 
   return OrderedDict(result)
