@@ -282,7 +282,13 @@ rtc.enable_timer_interrupt(False)
 
 t = rtc.datetime()
 # BUG ERRNO 22, EINVAL, when date read from RTC is invalid for the pico's RTC.
-RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0)) # synch PR2040 rtc too
+try:
+    RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0)) # synch PR2040 rtc too
+except OSError:
+    print("BAD DATA IN RTC, trying to fetch it from NTP")
+    sync_clock_from_ntp()
+    t = rtc.datetime()
+    RTC().datetime((t[0], t[1], t[2], t[6], t[3], t[4], t[5], 0)) # synch PR2040 rtc too
 
 # jazz up that console! toot toot!
 print("       ___            ___            ___          ___          ___            ___       ")
@@ -302,6 +308,7 @@ print("")
 
 # the pcf85063a defaults to 32KHz clock output so need to explicitly turn off
 warn_led(WARN_LED_OFF)
+
 
 # log the error, blink the warning led, and go back to sleep
 def halt(message):
