@@ -8,6 +8,7 @@ import enviro.helpers as helpers
 from phew import logging
 from enviro.constants import WAKE_REASON_RTC_ALARM, WAKE_REASON_BUTTON_PRESS
 import config
+from ucollections import OrderedDict
 
 # amount of rain required for the bucket to tip in mm
 RAIN_MM_PER_TICK = 0.2794
@@ -191,10 +192,20 @@ def get_sensor_readings(seconds_since_last, is_usb_power):
   ltr_data = ltr559.get_reading()
   rain, rain_per_second = rainfall(seconds_since_last)
 
-  from ucollections import OrderedDict
+  temperature = round(bme280_data[0], 2)
+  humidity = round(bme280_data[2], 2)
+
+  # Compensate for additional heating when on usb power - this also changes the
+  # relative humidity value.
+  if is_usb_power:
+    adjusted_temperature = temperature - config.usb_power_temperature_offset
+    absolute_humidity = helpers.relative_to_absolute_humidity(humidity, temperature)
+    humidity = helpers.absolute_to_relative_humidity(absolute_humidity, adjusted_temperature)
+    temperature = adjusted_temperature
+
   result = {
-    "temperature": round(bme280_data[0], 2),
-    "humidity": round(bme280_data[2], 2),
+    "temperature": round(temperature, 2),
+    "humidity": round(humidity, 2),
     "pressure": round(bme280_data[1] / 100.0, 2),
   }
 
